@@ -2,13 +2,11 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -21,6 +19,18 @@ type CLIflags struct {
 	Username     string
 	Password     string
 	TableHeaders string
+}
+
+// TableContainer is a struct containing all tables scraped from given webpage
+type TableContainer struct {
+	Table []Table
+}
+
+// Table is a struct containing data for single table
+type Table struct {
+	ID            int
+	ColumnHeaders []string
+	TableRows     [][]string
 }
 
 func getContent(config CLIflags) io.ReadCloser {
@@ -53,41 +63,41 @@ Function arguments:
 Return values:
 - stripped map containing only tables matching the headers
 */
-func tableStructureCheckAndCleanup(allTables map[int][][]string, tableHeaders string) map[int][][]string {
-	headers := strings.Split(tableHeaders, ",")
-
-	// Loop throught all tables that tokenizer managed to parse
-	for table, rows := range allTables {
-		// Delete table if number of collums is less than provided collums and go to next iteration. Avoids index-out-of-range error
-		if len(rows[0]) < len(headers) {
-			delete(allTables, table)
+func tableStructureCheckAndCleanup(tables *TableContainer, tableHeaders string) {
+	providedColumnHeaders := strings.Split(tableHeaders, ",")
+	// Loop throught all tables that tokenizer managed to parse and that are saved as TableContainer struct
+	// Loop is doing reverse lookup - from len()-1 index to 0, because we are also doing deletions from slice if table is not valid
+	for i := len(tables.Table) - 1; i >= 0; i-- {
+		// Delete scraped table if number of provided column headers does not match the number of column headers of a single table
+		if len(tables.Table[i].ColumnHeaders) < len(providedColumnHeaders) {
+			// Remove the table from slice
+			tables.Table = deleteTableFromSlice(tables.Table, i)
 			continue
 		}
-		// Check if first item in slice (First item always contains headers) matches provided filters
-		for i := range headers {
-			if !(headers[i] == rows[0][i]) {
+		// Check if collumn headers match provided column headers
+		for j := range providedColumnHeaders {
+			if !(providedColumnHeaders[j] == tables.Table[i].ColumnHeaders[j]) {
 				// If it does not match, delete table as the table is not valid format
-				delete(allTables, table)
+				tables.Table = deleteTableFromSlice(tables.Table, i)
+				continue
 			}
 		}
+
 	}
 
-	if len(allTables) == 0 {
+	if len(tables.Table) == 0 {
 		log.Fatal("Scraped tables do not match provided filter or no tables")
 	}
-
-	return allTables
 }
 
-/*func convertMapToJSON(allTables map[int][][]string) {
-
-	//novaMapa := map[string]string{}
-
-	for table := range allTables {
-		fmt.Println(table)
-	}
+// Function deleteTableFromSlice replaces current table at index with last table in slice and returns the same slice without last element (duplicate table)
+func deleteTableFromSlice(tables []Table, index int) []Table {
+	// Copy last table to index of current one
+	tables[index] = tables[len(tables)-1]
+	// Truncate slice - remove last table becase we already have a copy of it on current index
+	return tables[:len(tables)-1]
 }
-*/
+
 func main() {
 	// Set variables for CLI flags
 	targetWeb := CLIflags{}
@@ -106,13 +116,13 @@ func main() {
 	log.Printf("Succesfuly fetched " + targetWeb.URL + ". Starting tokenization ...")
 
 	// Initialize variables used in tokenization
-	var tableColumns []string
+
 	var tableRow []string
 	var loopNum int = 0
-	var tableIdentifier int
 
-	// Main variable for storing alreay extracted data
-	tableData := map[int][][]string{}
+	// Main variables for storing extracted data
+	tableContainer := TableContainer{}
+	table := Table{}
 
 	z := html.NewTokenizer(webpageHTML)
 	for {
@@ -126,23 +136,17 @@ func main() {
 		if tt == html.ErrorToken {
 			// Check if table is valid sturcture
 
-			cleanedTables := tableStructureCheckAndCleanup(tableData, targetWeb.TableHeaders)
-
-			enc := json.NewEncoder(os.Stdout)
-			err := enc.Encode(cleanedTables)
-			if err != nil {
-				fmt.Println(err.Error())
-			}
-			//convertMapToJSON(tableStructureCheckAndCleanup(tableData, targetWeb.TableHeaders))
+			tableStructureCheckAndCleanup(&tableContainer, targetWeb.TableHeaders)
+			fmt.Printf("%v\n", tableContainer)
 			return
 		}
 
 		// Search for start of table - <table> tag
 		if t.Data == "table" && tt == html.StartTagToken {
-			// Set table identifier
-			tableIdentifier = loopNum
-			// Cleanup table columns since they are written to data container. Each table elements has it's own colum names
-			tableColumns = []string{}
+
+			// Cleanup Table struct for storing table values and set identifier
+			table = Table{}
+			table.ID = loopNum
 
 			// Go to next element
 			tt = z.Next()
@@ -158,17 +162,15 @@ func main() {
 					for t.Data != "thead" {
 						// Get only text values to extract headers from table, ignore all other tags. Only plain text will be saved and that is collum name
 						if tt == html.TextToken {
-							tableColumns = append(tableColumns, t.Data)
+							table.ColumnHeaders = append(table.ColumnHeaders, t.Data)
 						}
 						// Go to next element and check again if we reached end of thead
 						tt = z.Next()
 						t = z.Token()
 					}
-					// Add table columns to map
-					tableData[tableIdentifier] = append(tableData[tableIdentifier], tableColumns)
 				}
+				// Once we found thead again, it means that this was closing tag </thead> and we got our column names so we can continue getting the data
 
-				// Since we found thead again, this means that it was closing tag </thead> and we got our column names
 				// Next thing is to find raw data inside <tr> and <td> elements. First we rearch for rows
 				if t.Data == "tr" && tt == html.StartTagToken {
 					// Set tableRow to empty slice, since each row will have its own data inside <td>
@@ -186,14 +188,16 @@ func main() {
 						tt = z.Next()
 						t = z.Token()
 					}
-					// Once we found closing </tr> tag, we apped row to slice and go further untill we hit like 96 again and start going through new row
-					tableData[tableIdentifier] = append(tableData[tableIdentifier], tableRow)
+					// Once we found closing </tr> tag, we apped row to slice and go further untill we hit a new row
+					table.TableRows = append(table.TableRows, tableRow)
 				}
-
 				tt = z.Next()
 				t = z.Token()
 			}
 		}
-
+		// On closing </table> tag, append scraped table to TableContainer
+		if t.Data == "table" && tt == html.EndTagToken {
+			tableContainer.Table = append(tableContainer.Table, table)
+		}
 	}
 }
