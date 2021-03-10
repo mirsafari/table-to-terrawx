@@ -1,10 +1,11 @@
-//https://stackoverflow.com/questions/35961491/how-to-convert-html-table-to-array-with-golang
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"strings"
@@ -15,11 +16,11 @@ import (
 
 // CLIflags is a struct that defines script config file structure and provides storage for CLI flags
 type CLIflags struct {
-	URL            string
-	Username       string
-	Password       string
-	TableHeaders   string
-	ExtractColumns string
+	URL          string
+	Username     string
+	Password     string
+	TableHeaders string
+	KVList       string
 }
 
 // TableContainer is a struct containing all tables scraped from given webpage
@@ -108,6 +109,35 @@ func (tables *TableContainer) convertToJSON() TableContainerJSON {
 	}
 
 	return jsonOutput
+}
+
+/* getKVPairs is a method that filters out JSON data for provided filter and returns KV paris
+Args:
+- string with 2 values that are separated by : and will be extracted from table
+Return values:
+- map[string]string containing KV pairs
+*/
+func (jsonContainer *TableContainerJSON) getKVPairs(kvFilter string) map[string]string {
+	// Initialize map that will be retured by function
+	ipHost := map[string]string{}
+	// Split string values to slice
+	kvListToExtract := strings.Split(kvFilter, ":")
+
+	// Iterate through all tables and rows
+	for _, table := range jsonContainer.Tables {
+		for _, object := range table {
+			// Save matching keys/values to new map
+			ipHost[object[kvListToExtract[0]]] = object[kvListToExtract[1]]
+		}
+	}
+	// Cleanup new map, delete values that are empty
+	for k, v := range ipHost {
+		if v == "" {
+			delete(ipHost, k)
+		}
+	}
+
+	return ipHost
 }
 
 func getHTMLContent(config CLIflags) io.ReadCloser {
@@ -234,7 +264,7 @@ func main() {
 	flag.StringVar(&targetWeb.Username, "username", "", "Username if web uses authentication")
 	flag.StringVar(&targetWeb.Password, "password", "", "Password if web uses authentication")
 	flag.StringVar(&targetWeb.TableHeaders, "table-headers", "", "Comma-separated list of table headers against each table on web will be compared. Case sensitive")
-	flag.StringVar(&targetWeb.ExtractColumns, "extract-columns", "", "Comma-separated list of table headers will be extracted from table. Case sensitive")
+	flag.StringVar(&targetWeb.KVList, "kv-list", "", "Comma-separated list of 2 items that will be extracted. Case sensitive")
 	flag.Parse()
 	log.Println("CLI flags successfuly initialized. Fetching website ...")
 
@@ -255,21 +285,15 @@ func main() {
 	// Get table data as JSON
 	jsonOutput := allTables.convertToJSON()
 
-	extractColumns := strings.Split(targetWeb.ExtractColumns, ",")
-	fmt.Println(extractColumns)
-
-	for _, table := range jsonOutput.Tables {
-		for k, v := range table {
-			fmt.Println(k, v)
-		}
+	//fmt.Printf("%v\n", allTables)
+	b, err := json.Marshal(jsonOutput.getKVPairs(targetWeb.KVList))
+	if err != nil {
+		fmt.Println(err)
 	}
-	/*
-		//fmt.Printf("%v\n", allTables)
-		b, err := json.Marshal(jsonOutput)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		//fmt.Println(string(b))
-	*/
+	log.Println("Writing tables as JSON to file ...")
+	err = ioutil.WriteFile("/tmp/dat1", b, 0644)
+	if err != nil {
+		fmt.Println(err)
+	}
+	log.Println("Successfuly written tables to /tmp/dat1")
 }
