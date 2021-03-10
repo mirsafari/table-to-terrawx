@@ -15,10 +15,11 @@ import (
 
 // CLIflags is a struct that defines script config file structure and provides storage for CLI flags
 type CLIflags struct {
-	URL          string
-	Username     string
-	Password     string
-	TableHeaders string
+	URL            string
+	Username       string
+	Password       string
+	TableHeaders   string
+	ExtractColumns string
 }
 
 // TableContainer is a struct containing all tables scraped from given webpage
@@ -33,9 +34,13 @@ type Table struct {
 	TableRows     [][]string
 }
 
+// TableContainerJSON is a struct containing filtered tables scraped from webpage ready to be outputed. Each table is a JSON object, where array of data is located and keys are column headers
+type TableContainerJSON struct {
+	Tables [][]map[string]string
+}
+
 /* tableStructureCheckAndCleanup is a method tgat compares column headers provided by user with column headers scraped by tokenizer. Function also deletes tables not matching those headers
 Args:
-- pointer to TableContainer
 - string (comma separated list) of required column headers for scraped table
 */
 func (tables *TableContainer) tableStructureCheckAndCleanup(tableHeaders string) {
@@ -44,6 +49,7 @@ func (tables *TableContainer) tableStructureCheckAndCleanup(tableHeaders string)
 	// Loop throught all tables that tokenizer managed to parse and that are saved as TableContainer struct
 	// Loop is doing reverse lookup - from len()-1 index to 0, because we are also doing deletions from slice if table is not valid
 	for i := len(tables.Table) - 1; i >= 0; i-- {
+
 		// Delete scraped table if number of provided column headers is less than number of column headers of a single table
 		if len(tables.Table[i].ColumnHeaders) < len(providedColumnHeaders) {
 			// Remove the table from slice
@@ -65,12 +71,43 @@ func (tables *TableContainer) tableStructureCheckAndCleanup(tableHeaders string)
 	}
 }
 
-// deleteTableFromSlice is a method that replaces current table at index with last table in slice and returns the same slice without last element (duplicate table)
+/* deleteTableFromSlice is a method that replaces current table at index with last table in slice and returns the same slice without last element (duplicate table)
+Args:
+- int that represents index of item in slice
+*/
 func (tables *TableContainer) deleteTableFromSlice(index int) {
 	// Copy last table to index of current one
 	tables.Table[index] = tables.Table[len(tables.Table)-1]
 	// Truncate slice - remove last table becase we already have a copy of it on current index
 	tables.Table = tables.Table[:len(tables.Table)-1]
+}
+
+/* convertToJSON is a method that converts TableContainer sturct to JSON. It creates a map where keys are table column headers and values are data inside each row
+Return values:
+- TableContainerJSON struct, containing each table as JSON object
+*/
+func (tables *TableContainer) convertToJSON() TableContainerJSON {
+	jsonOutput := TableContainerJSON{}
+
+	// Loop through all tables
+	for _, table := range tables.Table {
+		// Create slice of maps containing all rows of a given table
+		outputObjects := []map[string]string{}
+		// For each table, loop through all of its rows
+		for _, rows := range table.TableRows {
+			// Create a map containing all data of a given row with column names as keys
+			valueMapping := map[string]string{}
+			// For each data in a row, save that data to a map with key matching column header name
+			for j, item := range rows {
+				//fmt.Println(table.ColumnHeaders[i], "-->", item)
+				valueMapping[table.ColumnHeaders[j]] = item
+			}
+			outputObjects = append(outputObjects, valueMapping)
+		}
+		jsonOutput.Tables = append(jsonOutput.Tables, outputObjects)
+	}
+
+	return jsonOutput
 }
 
 func getHTMLContent(config CLIflags) io.ReadCloser {
@@ -165,6 +202,11 @@ func scrapeTablesFromHTML(webpageHTML io.ReadCloser) TableContainer {
 							// If we found raw data, we apped it to slice of that row
 							tableRow = append(tableRow, t.Data)
 						}
+						if t.Data == "br" && tt == html.SelfClosingTagToken {
+							// it means that it's an empty cell and we put empty string inside
+							// this is to aviod mismatch in number of elemets
+							tableRow = append(tableRow, "")
+						}
 						// And then we go to next element
 						tt = z.Next()
 						t = z.Token()
@@ -191,7 +233,8 @@ func main() {
 	flag.StringVar(&targetWeb.URL, "url", "https://www.google.com", "URL of web to scrape")
 	flag.StringVar(&targetWeb.Username, "username", "", "Username if web uses authentication")
 	flag.StringVar(&targetWeb.Password, "password", "", "Password if web uses authentication")
-	flag.StringVar(&targetWeb.TableHeaders, "table-headers", "", "Comma-separated list of table headers that needed to to be extracted. Case sensitive")
+	flag.StringVar(&targetWeb.TableHeaders, "table-headers", "", "Comma-separated list of table headers against each table on web will be compared. Case sensitive")
+	flag.StringVar(&targetWeb.ExtractColumns, "extract-columns", "", "Comma-separated list of table headers will be extracted from table. Case sensitive")
 	flag.Parse()
 	log.Println("CLI flags successfuly initialized. Fetching website ...")
 
@@ -207,6 +250,26 @@ func main() {
 	// Filter out tables that are not needed
 	allTables.tableStructureCheckAndCleanup(targetWeb.TableHeaders)
 	log.Println("Succesfuly finished table filtering. Tables matching filter:", len(allTables.Table))
+	//fmt.Println(allTables)
 
-	fmt.Printf("%v\n", allTables)
+	// Get table data as JSON
+	jsonOutput := allTables.convertToJSON()
+
+	extractColumns := strings.Split(targetWeb.ExtractColumns, ",")
+	fmt.Println(extractColumns)
+
+	for _, table := range jsonOutput.Tables {
+		for k, v := range table {
+			fmt.Println(k, v)
+		}
+	}
+	/*
+		//fmt.Printf("%v\n", allTables)
+		b, err := json.Marshal(jsonOutput)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		//fmt.Println(string(b))
+	*/
 }
