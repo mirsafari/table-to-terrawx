@@ -60,9 +60,8 @@ func (tables *TableContainer) tableStructureCheckAndCleanup(tableHeaders string)
 			}
 		}
 	}
-
 	if len(tables.Table) == 0 {
-		log.Fatal("Scraped tables do not match provided filter")
+		log.Fatal("No tables matching provided filter. Check values from --table-headers flag and HTML <table> structure")
 	}
 }
 
@@ -116,7 +115,11 @@ func scrapeTablesFromHTML(webpageHTML io.ReadCloser) TableContainer {
 
 		// ErrorToken is if we reached end of HTML document, so we return all tables to main function
 		if tt == html.ErrorToken {
-			return tableContainer
+			if len(tableContainer.Table) == 0 {
+				log.Fatal("Scraped Webpage does not contain any valid <table> elements.")
+			} else {
+				return tableContainer
+			}
 		}
 
 		// Search for start of table - <table> tag
@@ -190,16 +193,20 @@ func main() {
 	flag.StringVar(&targetWeb.Password, "password", "", "Password if web uses authentication")
 	flag.StringVar(&targetWeb.TableHeaders, "table-headers", "", "Comma-separated list of table headers that needed to to be extracted. Case sensitive")
 	flag.Parse()
-	log.Printf("CLI flags successfuly initialized. Fetching website ...")
+	log.Println("CLI flags successfuly initialized. Fetching website ...")
 
 	// Call function to scrape webpage
 	webpageHTML := getHTMLContent(targetWeb)
 	defer webpageHTML.Close()
-	log.Printf("Succesfuly fetched " + targetWeb.URL + ". Starting tokenization ...")
+	log.Println("Succesfuly fetched " + targetWeb.URL + ". Starting tokenization ...")
 
 	// Call function to tokenize HTML and filters out tables
 	allTables := scrapeTablesFromHTML(webpageHTML)
+	log.Println("Succesfuly finished tokenization.")
 
+	// Filter out tables that are not needed
 	allTables.tableStructureCheckAndCleanup(targetWeb.TableHeaders)
+	log.Println("Succesfuly finished table filtering. Tables matching filter:", len(allTables.Table))
+
 	fmt.Printf("%v\n", allTables)
 }
