@@ -21,6 +21,7 @@ type CLIflags struct {
 	Password     string
 	TableHeaders string
 	KVList       string
+	Output       string
 }
 
 // TableContainer is a struct containing all tables scraped from given webpage
@@ -100,7 +101,7 @@ func (tables *TableContainer) convertToJSON() TableContainerJSON {
 			valueMapping := map[string]string{}
 			// For each data in a row, save that data to a map with key matching column header name
 			for j, item := range rows {
-				//fmt.Println(table.ColumnHeaders[i], "-->", item)
+				fmt.Println(table.ColumnHeaders[j], "-->", item)
 				valueMapping[table.ColumnHeaders[j]] = item
 			}
 			outputObjects = append(outputObjects, valueMapping)
@@ -265,6 +266,7 @@ func main() {
 	flag.StringVar(&targetWeb.Password, "password", "", "Password if web uses authentication")
 	flag.StringVar(&targetWeb.TableHeaders, "table-headers", "", "Comma-separated list of table headers against each table on web will be compared. Case sensitive")
 	flag.StringVar(&targetWeb.KVList, "kv-list", "", "Comma-separated list of 2 items that will be extracted. Case sensitive")
+	flag.StringVar(&targetWeb.Output, "output", "stdout", "Comma-separated list of 2 items that will be extracted. Case sensitive")
 	flag.Parse()
 	log.Println("CLI flags successfuly initialized. Fetching website ...")
 
@@ -280,10 +282,11 @@ func main() {
 	// Filter out tables that are not needed
 	allTables.tableStructureCheckAndCleanup(targetWeb.TableHeaders)
 	log.Println("Succesfuly finished table filtering. Tables matching filter:", len(allTables.Table))
-	//fmt.Println(allTables)
 
 	// Get table data as JSON
 	jsonOutput := allTables.convertToJSON()
+
+	fmt.Println(jsonOutput)
 
 	//fmt.Printf("%v\n", allTables)
 	b, err := json.Marshal(jsonOutput.getKVPairs(targetWeb.KVList))

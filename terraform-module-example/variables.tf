@@ -1,0 +1,3 @@
+variable "records" {
+  type = map
+}
