@@ -33,7 +33,48 @@ type Table struct {
 	TableRows     [][]string
 }
 
-func getContent(config CLIflags) io.ReadCloser {
+/* tableStructureCheckAndCleanup is a method tgat compares column headers provided by user with column headers scraped by tokenizer. Function also deletes tables not matching those headers
+Args:
+- pointer to TableContainer
+- string (comma separated list) of required column headers for scraped table
+*/
+func (tables *TableContainer) tableStructureCheckAndCleanup(tableHeaders string) {
+	// Split given headers in csv format to slice
+	providedColumnHeaders := strings.Split(tableHeaders, ",")
+	// Loop throught all tables that tokenizer managed to parse and that are saved as TableContainer struct
+	// Loop is doing reverse lookup - from len()-1 index to 0, because we are also doing deletions from slice if table is not valid
+	for i := len(tables.Table) - 1; i >= 0; i-- {
+		// Delete scraped table if number of provided column headers is less than number of column headers of a single table
+		if len(tables.Table[i].ColumnHeaders) < len(providedColumnHeaders) {
+			// Remove the table from slice
+			tables.deleteTableFromSlice(i)
+			continue
+		}
+
+		// Check if provided collumn headers match table column headers scraped by tokenizer
+		for j := range providedColumnHeaders {
+			if !(providedColumnHeaders[j] == tables.Table[i].ColumnHeaders[j]) {
+				// If it does not match, delete table as the table is not valid format
+				tables.deleteTableFromSlice(i)
+				break
+			}
+		}
+	}
+
+	if len(tables.Table) == 0 {
+		log.Fatal("Scraped tables do not match provided filter")
+	}
+}
+
+// deleteTableFromSlice is a method that replaces current table at index with last table in slice and returns the same slice without last element (duplicate table)
+func (tables *TableContainer) deleteTableFromSlice(index int) {
+	// Copy last table to index of current one
+	tables.Table[index] = tables.Table[len(tables.Table)-1]
+	// Truncate slice - remove last table becase we already have a copy of it on current index
+	tables.Table = tables.Table[:len(tables.Table)-1]
+}
+
+func getHTMLContent(config CLIflags) io.ReadCloser {
 	// Create new request object
 	req, err := http.NewRequest("GET", config.URL, nil)
 	if err != nil {
@@ -56,67 +97,8 @@ func getContent(config CLIflags) io.ReadCloser {
 	return resp.Body
 }
 
-/* tableStructureCheckAndCleanup checks all tables fetched by tokenizer and compares table headers to provided headers that needed to be extracted
-Function arguments:
-- map cotaining allTables
-- string of headers that are comma separated
-Return values:
-- stripped map containing only tables matching the headers
-*/
-func tableStructureCheckAndCleanup(tables *TableContainer, tableHeaders string) {
-	providedColumnHeaders := strings.Split(tableHeaders, ",")
-	// Loop throught all tables that tokenizer managed to parse and that are saved as TableContainer struct
-	// Loop is doing reverse lookup - from len()-1 index to 0, because we are also doing deletions from slice if table is not valid
-	for i := len(tables.Table) - 1; i >= 0; i-- {
-		// Delete scraped table if number of provided column headers does not match the number of column headers of a single table
-		if len(tables.Table[i].ColumnHeaders) < len(providedColumnHeaders) {
-			// Remove the table from slice
-			tables.Table = deleteTableFromSlice(tables.Table, i)
-			continue
-		}
-		// Check if collumn headers match provided column headers
-		for j := range providedColumnHeaders {
-			if !(providedColumnHeaders[j] == tables.Table[i].ColumnHeaders[j]) {
-				// If it does not match, delete table as the table is not valid format
-				tables.Table = deleteTableFromSlice(tables.Table, i)
-				continue
-			}
-		}
-
-	}
-
-	if len(tables.Table) == 0 {
-		log.Fatal("Scraped tables do not match provided filter or no tables")
-	}
-}
-
-// Function deleteTableFromSlice replaces current table at index with last table in slice and returns the same slice without last element (duplicate table)
-func deleteTableFromSlice(tables []Table, index int) []Table {
-	// Copy last table to index of current one
-	tables[index] = tables[len(tables)-1]
-	// Truncate slice - remove last table becase we already have a copy of it on current index
-	return tables[:len(tables)-1]
-}
-
-func main() {
-	// Set variables for CLI flags
-	targetWeb := CLIflags{}
-
-	// Create and parse CLI flags
-	flag.StringVar(&targetWeb.URL, "url", "https://www.google.com", "URL of web to scrape")
-	flag.StringVar(&targetWeb.Username, "username", "", "Username if web uses authentication")
-	flag.StringVar(&targetWeb.Password, "password", "", "Password if web uses authentication")
-	flag.StringVar(&targetWeb.TableHeaders, "table-headers", "", "Comma-separated list of table headers that needed to to be extracted. Case sensitive")
-	flag.Parse()
-	log.Printf("CLI flags successfuly initialized. Fetching website ...")
-
-	// Call function to scrape webpage
-	webpageHTML := getContent(targetWeb)
-	defer webpageHTML.Close()
-	log.Printf("Succesfuly fetched " + targetWeb.URL + ". Starting tokenization ...")
-
+func scrapeTablesFromHTML(webpageHTML io.ReadCloser) TableContainer {
 	// Initialize variables used in tokenization
-
 	var tableRow []string
 	var loopNum int = 0
 
@@ -132,13 +114,9 @@ func main() {
 		// Keep track how many times did we loop to give table UID
 		loopNum++
 
-		// ErrorToken is if we reached end
+		// ErrorToken is if we reached end of HTML document, so we return all tables to main function
 		if tt == html.ErrorToken {
-			// Check if table is valid sturcture
-
-			tableStructureCheckAndCleanup(&tableContainer, targetWeb.TableHeaders)
-			fmt.Printf("%v\n", tableContainer)
-			return
+			return tableContainer
 		}
 
 		// Search for start of table - <table> tag
@@ -200,4 +178,28 @@ func main() {
 			tableContainer.Table = append(tableContainer.Table, table)
 		}
 	}
+}
+
+func main() {
+	// Set variables for CLI flags
+	targetWeb := CLIflags{}
+
+	// Create and parse CLI flags
+	flag.StringVar(&targetWeb.URL, "url", "https://www.google.com", "URL of web to scrape")
+	flag.StringVar(&targetWeb.Username, "username", "", "Username if web uses authentication")
+	flag.StringVar(&targetWeb.Password, "password", "", "Password if web uses authentication")
+	flag.StringVar(&targetWeb.TableHeaders, "table-headers", "", "Comma-separated list of table headers that needed to to be extracted. Case sensitive")
+	flag.Parse()
+	log.Printf("CLI flags successfuly initialized. Fetching website ...")
+
+	// Call function to scrape webpage
+	webpageHTML := getHTMLContent(targetWeb)
+	defer webpageHTML.Close()
+	log.Printf("Succesfuly fetched " + targetWeb.URL + ". Starting tokenization ...")
+
+	// Call function to tokenize HTML and filters out tables
+	allTables := scrapeTablesFromHTML(webpageHTML)
+
+	allTables.tableStructureCheckAndCleanup(targetWeb.TableHeaders)
+	fmt.Printf("%v\n", allTables)
 }
