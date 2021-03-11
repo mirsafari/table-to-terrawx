@@ -12,10 +12,10 @@ provider "powerdns" {
 }
 
 resource "powerdns_record" "ip_record" {
-  for_each = var.records
+  for_each =  { for i, record in local.helper_list : i => record }
   zone    = "subdomain.tld."
-  name    = each.value
-  type    = "A"
-  ttl     = 300
-  records = [each.key]
+  name     = "${each.value.hostname}."
+  type     = "A"
+  ttl      = 300
+  records  = [each.value.ip]
 }
