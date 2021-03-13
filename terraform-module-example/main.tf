@@ -19,3 +19,17 @@ resource "powerdns_record" "ip_record" {
   ttl      = 300
   records  = [each.value.ip]
 }
+
+resource "awx_inventory" "generated" {
+  for_each = var.inventories
+  name            = each.key
+  description     = each.value.confluence_url
+  organisation_id = 1
+}
+
+resource "awx_host" "host" {  
+  for_each =  { for i, record in local.helper_list : i => record }
+  inventory_id = awx_inventory.generated[each.value.inventory].id
+  name         = each.value.hostname
+  enabled      = true
+}
