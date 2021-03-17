@@ -16,12 +16,13 @@ import (
 
 // CLIflags is a struct that defines script config file structure and provides storage for CLI flags
 type CLIflags struct {
-	URL          string
-	Username     string
-	Password     string
-	TableHeaders string
-	KVList       string
-	Output       string
+	ConfluenceURL    string
+	ConfluencePageID int64
+	ConfluenceUser   string
+	ConfluenceAPIKey string
+	TableHeaders     string
+	KVList           string
+	Output           string
 }
 
 // TableContainer is a struct containing all tables scraped from given webpage
@@ -143,14 +144,12 @@ func (jsonContainer *TableContainerJSON) getKVPairs(kvFilter string) map[string]
 
 func getHTMLContent(config CLIflags) io.ReadCloser {
 	// Create new request object
-	req, err := http.NewRequest("GET", config.URL, nil)
+	req, err := http.NewRequest("GET", config.ConfluenceURL, nil)
 	if err != nil {
 		log.Fatal("Failed creating request object. Exiting. Error: ", err)
 	}
-	// Setup authentication if username and password provided
-	if len(config.Username) > 0 && len(config.Password) > 0 {
-		req.SetBasicAuth(config.Username, config.Password)
-	}
+
+	req.SetBasicAuth(config.ConfluenceUser, config.ConfluenceAPIKey)
 
 	client := &http.Client{Timeout: time.Second * 10}
 	// Send request
@@ -258,29 +257,30 @@ func scrapeTablesFromHTML(webpageHTML io.ReadCloser) TableContainer {
 
 func main() {
 	// Set variables for CLI flags
-	targetWeb := CLIflags{}
+	confluenceScrapeConfig := CLIflags{}
 
 	// Create and parse CLI flags
-	flag.StringVar(&targetWeb.URL, "url", "https://www.google.com", "URL of web to scrape")
-	flag.StringVar(&targetWeb.Username, "username", "", "Username if web uses authentication")
-	flag.StringVar(&targetWeb.Password, "password", "", "Password if web uses authentication")
-	flag.StringVar(&targetWeb.TableHeaders, "table-headers", "", "Comma-separated list of table headers against each table on web will be compared. Case sensitive")
-	flag.StringVar(&targetWeb.KVList, "kv-list", "", "Comma-separated list of 2 items that will be extracted. Case sensitive")
-	flag.StringVar(&targetWeb.Output, "output", "stdout", "Comma-separated list of 2 items that will be extracted. Case sensitive")
+	flag.StringVar(&confluenceScrapeConfig.ConfluenceURL, "confl-url", "", "Confluence URL on atlassian.net")
+	flag.Int64Var(&confluenceScrapeConfig.ConfluencePageID, "confl-pageid", 0, "PageID on atlassian.net")
+	flag.StringVar(&confluenceScrapeConfig.ConfluenceUser, "confl-user", "", "Confluence Username")
+	flag.StringVar(&confluenceScrapeConfig.ConfluenceAPIKey, "confl-apikey", "", "Confluence API Key")
+	flag.StringVar(&confluenceScrapeConfig.TableHeaders, "table-headers", "", "Comma-separated list of table headers against each table on web will be compared. Case sensitive")
+	flag.StringVar(&confluenceScrapeConfig.KVList, "kv-list", "", "Comma-separated list of 2 items that will be extracted. Case sensitive")
+	flag.StringVar(&confluenceScrapeConfig.Output, "output", "st	dout", "Comma-separated list of 2 items that will be extracted. Case sensitive")
 	flag.Parse()
 	log.Println("CLI flags successfuly initialized. Fetching website ...")
 
 	// Call function to scrape webpage
-	webpageHTML := getHTMLContent(targetWeb)
+	webpageHTML := getHTMLContent(confluenceScrapeConfig)
 	defer webpageHTML.Close()
-	log.Println("Succesfuly fetched " + targetWeb.URL + ". Starting tokenization ...")
+	log.Println("Succesfuly fetched " + confluenceScrapeConfig.ConfluenceURL + " page confluenceScrapeConfig.ConfluencePageID. Starting tokenization ...")
 
 	// Call function to tokenize HTML and filters out tables
 	allTables := scrapeTablesFromHTML(webpageHTML)
 	log.Println("Succesfuly finished tokenization.")
 
 	// Filter out tables that are not needed
-	allTables.tableStructureCheckAndCleanup(targetWeb.TableHeaders)
+	allTables.tableStructureCheckAndCleanup(confluenceScrapeConfig.TableHeaders)
 	log.Println("Succesfuly finished table filtering. Tables matching filter:", len(allTables.Table))
 
 	// Get table data as JSON
@@ -289,7 +289,7 @@ func main() {
 	fmt.Println(jsonOutput)
 
 	//fmt.Printf("%v\n", allTables)
-	b, err := json.Marshal(jsonOutput.getKVPairs(targetWeb.KVList))
+	b, err := json.Marshal(jsonOutput.getKVPairs(confluenceScrapeConfig.KVList))
 	if err != nil {
 		fmt.Println(err)
 	}
