@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -8,41 +9,14 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/net/html"
 )
 
-// CLIflags is a struct that defines script config file structure and provides storage for CLI flags
-type CLIflags struct {
-	ConfluenceURL    string
-	ConfluencePageID int64
-	ConfluenceUser   string
-	ConfluenceAPIKey string
-	TableHeaders     string
-	KVList           string
-	Output           string
-}
-
-// TableContainer is a struct containing all tables scraped from given webpage
-type TableContainer struct {
-	Table []Table
-}
-
-// Table is a struct containing data for single table
-type Table struct {
-	ID            int
-	ColumnHeaders []string
-	TableRows     [][]string
-}
-
-// TableContainerJSON is a struct containing filtered tables scraped from webpage ready to be outputed. Each table is a JSON object, where array of data is located and keys are column headers
-type TableContainerJSON struct {
-	Tables [][]map[string]string
-}
-
-/* tableStructureCheckAndCleanup is a method tgat compares column headers provided by user with column headers scraped by tokenizer. Function also deletes tables not matching those headers
+/* tableStructureCheckAndCleanup is a method that compares column headers provided by user with column headers scraped by tokenizer. Function also deletes tables not matching those headers
 Args:
 - string (comma separated list) of required column headers for scraped table
 */
@@ -102,7 +76,6 @@ func (tables *TableContainer) convertToJSON() TableContainerJSON {
 			valueMapping := map[string]string{}
 			// For each data in a row, save that data to a map with key matching column header name
 			for j, item := range rows {
-				fmt.Println(table.ColumnHeaders[j], "-->", item)
 				valueMapping[table.ColumnHeaders[j]] = item
 			}
 			outputObjects = append(outputObjects, valueMapping)
@@ -142,9 +115,10 @@ func (jsonContainer *TableContainerJSON) getKVPairs(kvFilter string) map[string]
 	return ipHost
 }
 
-func getHTMLContent(config CLIflags) io.ReadCloser {
+func getPageAsJSON(config CLIflags) Content {
 	// Create new request object
-	req, err := http.NewRequest("GET", config.ConfluenceURL, nil)
+	confluenceRESTAPIEndpoint := "https://" + config.ConfluenceDomain + "/wiki/rest/api/content/" + strconv.Itoa(int(config.ConfluencePageID)) + "?expand=body.storage.value"
+	req, err := http.NewRequest("GET", confluenceRESTAPIEndpoint, nil)
 	if err != nil {
 		log.Fatal("Failed creating request object. Exiting. Error: ", err)
 	}
@@ -158,12 +132,26 @@ func getHTMLContent(config CLIflags) io.ReadCloser {
 		log.Fatal("Failed creating request. Exiting. Error: ", err)
 	}
 	if resp.StatusCode != 200 {
-		log.Fatal("Failed scraping webpage. HTTP status code", resp.StatusCode)
+		log.Fatal("Failed scraping webpage. HTTP status code: ", resp.StatusCode)
 	}
-	return resp.Body
+
+	// Read Request and save it to struct
+	jsonResponse := Content{}
+	rawData, err := ioutil.ReadAll(resp.Body) // Read response from io.ReadCloser and save it as byte to data
+	if err != nil {
+		log.Fatal("Failed reading response. Exiting. Error: ", err)
+	}
+	err = json.Unmarshal(rawData, &jsonResponse) // Try to unmarshal to raw encoded JSON value to map, notice &
+	if err != nil {
+		log.Fatal("Failed converting response to JSON. Exiting. Error: ", err)
+	}
+	// Close Request
+	resp.Body.Close()
+
+	return jsonResponse
 }
 
-func scrapeTablesFromHTML(webpageHTML io.ReadCloser) TableContainer {
+func scrapeTablesFromHTML(webpageHTML io.Reader) TableContainer {
 	// Initialize variables used in tokenization
 	var tableRow []string
 	var loopNum int = 0
@@ -201,43 +189,46 @@ func scrapeTablesFromHTML(webpageHTML io.ReadCloser) TableContainer {
 			t = z.Token()
 			// Loop untill we hit table again, but this time it is closing table tag </table>. This means we do not go back, untill we go throught whole table
 			for t.Data != "table" {
-				// Finding <thead> to extract collumn names.
-				if t.Data == "thead" && tt == html.StartTagToken {
-					// Go to next element inside thead
-					tt = z.Next()
-					t = z.Token()
-					// Loop untill we hit thead again, but this time it is closing thead tag </thead>. This means we do not go back untill we go throught whole thead and get all collumn names
-					for t.Data != "thead" {
-						// Get only text values to extract headers from table, ignore all other tags. Only plain text will be saved and that is collum name
-						if tt == html.TextToken {
-							table.ColumnHeaders = append(table.ColumnHeaders, t.Data)
-						}
-						// Go to next element and check again if we reached end of thead
-						tt = z.Next()
-						t = z.Token()
-					}
-				}
-				// Once we found thead again, it means that this was closing tag </thead> and we got our column names so we can continue getting the data
-
-				// Next thing is to find raw data inside <tr> and <td> elements. First we rearch for rows
 				if t.Data == "tr" && tt == html.StartTagToken {
-					// Set tableRow to empty slice, since each row will have its own data inside <td>
 					tableRow = []string{}
-					// Go to next element
 					tt = z.Next()
 					t = z.Token()
-					// Iterate further untill we hit tr again, this means we got to </tr>. We are not exiting loop untill we get raw data (html.TextToken). This data is only inside <td>
+					// Loop whole row to get all data inside this row
 					for t.Data != "tr" {
-						if tt == html.TextToken {
-							// If we found raw data, we apped it to slice of that row
-							tableRow = append(tableRow, t.Data)
+						if t.Data == "th" && tt == html.StartTagToken {
+							tt = z.Next()
+							t = z.Token()
+							// Loop whole TH to get data
+							for t.Data != "th" {
+								// Get only text values to extract headers from table, ignore all other tags. Only plain text will be saved and that is collum name
+								if tt == html.TextToken {
+									table.ColumnHeaders = append(table.ColumnHeaders, t.Data)
+								}
+								// Go to next element and check again if we reached end of thead
+								tt = z.Next()
+								t = z.Token()
+							}
 						}
-						if t.Data == "br" && tt == html.SelfClosingTagToken {
-							// it means that it's an empty cell and we put empty string inside
-							// this is to aviod mismatch in number of elemets
-							tableRow = append(tableRow, "")
+
+						if t.Data == "td" && tt == html.StartTagToken {
+							// Set tableRow to empty slice, since each row will have its own data inside <td>
+							// Go to next element
+							tt = z.Next()
+							t = z.Token()
+							// Iterate further untill we hit tr again, this means we got to </tr>. We are not exiting loop untill we get raw data (html.TextToken). This data is only inside <td>
+							for t.Data != "td" {
+								if tt == html.TextToken {
+									// If we found raw data, we apped it to slice of that row
+									tableRow = append(tableRow, t.Data)
+								}
+								if tt == html.SelfClosingTagToken {
+									tableRow = append(tableRow, "")
+								}
+								// And then we go to next element
+								tt = z.Next()
+								t = z.Token()
+							}
 						}
-						// And then we go to next element
 						tt = z.Next()
 						t = z.Token()
 					}
@@ -247,10 +238,10 @@ func scrapeTablesFromHTML(webpageHTML io.ReadCloser) TableContainer {
 				tt = z.Next()
 				t = z.Token()
 			}
-		}
-		// On closing </table> tag, append scraped table to TableContainer
-		if t.Data == "table" && tt == html.EndTagToken {
-			tableContainer.Table = append(tableContainer.Table, table)
+			// On closing </table> tag, append scraped table to TableContainer
+			if t.Data == "table" && tt == html.EndTagToken {
+				tableContainer.Table = append(tableContainer.Table, table)
+			}
 		}
 	}
 }
@@ -260,7 +251,7 @@ func main() {
 	confluenceScrapeConfig := CLIflags{}
 
 	// Create and parse CLI flags
-	flag.StringVar(&confluenceScrapeConfig.ConfluenceURL, "confl-url", "", "Confluence URL on atlassian.net")
+	flag.StringVar(&confluenceScrapeConfig.ConfluenceDomain, "confl-domain", "", "Confluence domain on atlassian.net")
 	flag.Int64Var(&confluenceScrapeConfig.ConfluencePageID, "confl-pageid", 0, "PageID on atlassian.net")
 	flag.StringVar(&confluenceScrapeConfig.ConfluenceUser, "confl-user", "", "Confluence Username")
 	flag.StringVar(&confluenceScrapeConfig.ConfluenceAPIKey, "confl-apikey", "", "Confluence API Key")
@@ -271,13 +262,20 @@ func main() {
 	log.Println("CLI flags successfuly initialized. Fetching website ...")
 
 	// Call function to scrape webpage
-	webpageHTML := getHTMLContent(confluenceScrapeConfig)
-	defer webpageHTML.Close()
-	log.Println("Succesfuly fetched " + confluenceScrapeConfig.ConfluenceURL + " page confluenceScrapeConfig.ConfluencePageID. Starting tokenization ...")
+	//confluencePage := getPageAsJSON(confluenceScrapeConfig)
+	log.Println("Succesfuly fetched "+confluenceScrapeConfig.ConfluenceDomain+" page:", strconv.Itoa(int(confluenceScrapeConfig.ConfluencePageID))+". Starting tokenization ...")
 
+	// Get page body as string out of JSON response
+	pageBody := getPageAsJSON(confluenceScrapeConfig)
 	// Call function to tokenize HTML and filters out tables
-	allTables := scrapeTablesFromHTML(webpageHTML)
+	byteData := []byte(pageBody.Body.Storage.Value)
+
+	r := bytes.NewReader(byteData)
+
+	allTables := scrapeTablesFromHTML(r)
 	log.Println("Succesfuly finished tokenization.")
+
+	//fmt.Printf("%+v\n", allTables)
 
 	// Filter out tables that are not needed
 	allTables.tableStructureCheckAndCleanup(confluenceScrapeConfig.TableHeaders)
