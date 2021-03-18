@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
-	"log"
 	"strconv"
+
+	log "github.com/sirupsen/logrus"
 )
 
 func main() {
@@ -21,44 +21,71 @@ func main() {
 	flag.StringVar(&confluenceScrapeConfig.ConfluenceAPIKey, "confl-apikey", "", "Confluence API Key")
 	flag.StringVar(&confluenceScrapeConfig.TableHeaders, "table-headers", "", "Comma-separated list of table headers against each table on web will be compared. Case sensitive")
 	flag.StringVar(&confluenceScrapeConfig.KVList, "kv-list", "", "Comma-separated list of 2 items that will be extracted. Case sensitive")
-	flag.StringVar(&confluenceScrapeConfig.Output, "output", "st	dout", "Comma-separated list of 2 items that will be extracted. Case sensitive")
+	flag.StringVar(&confluenceScrapeConfig.Output, "output", "stdout", "How results should be displayed. stdout or tfvars")
+	flag.BoolVar(&confluenceScrapeConfig.LogLevel, "debug", false, "Show debug information")
 	flag.Parse()
-	log.Println("CLI flags successfuly initialized. Fetching website ...")
+
+	// Enable debug logging
+	if confluenceScrapeConfig.LogLevel == true {
+		log.SetFormatter(&log.TextFormatter{
+			FullTimestamp: true,
+		})
+		log.SetLevel(log.DebugLevel)
+	}
+
+	log.Debug("CLI flags successfuly initialized. Fetching website ...")
 
 	// Call function to scrape webpage
-	//confluencePage := getPageAsJSON(confluenceScrapeConfig)
-	log.Println("Succesfuly fetched "+confluenceScrapeConfig.ConfluenceDomain+" page:", strconv.Itoa(int(confluenceScrapeConfig.ConfluencePageID))+". Starting tokenization ...")
+	pageBodyAndMetadata := getPageAsJSON(confluenceScrapeConfig)
+	log.Debug("Succesfuly fetched "+confluenceScrapeConfig.ConfluenceDomain+" page:", strconv.Itoa(int(confluenceScrapeConfig.ConfluencePageID))+". Starting tokenization ...")
 
-	// Get page body as string out of JSON response
-	pageBody := getPageAsJSON(confluenceScrapeConfig)
-	// Call function to tokenize HTML and filters out tables
-	byteData := []byte(pageBody.Body.Storage.Value)
+	// Convert pageBody.Body.Storage.Value to byte, so we can create ioReader based of it, which is a required type for HTML Tokenizer
+	// pageBody.Body.Storage.Value contains HTML of the page - only data inside <body> elemet
+	bodyElementHTML := []byte(pageBodyAndMetadata.Body.Storage.Value)
+	bodyElementBytes := bytes.NewReader(bodyElementHTML)
 
-	r := bytes.NewReader(byteData)
-
-	allTables := scrapeTablesFromHTML(r)
-	log.Println("Succesfuly finished tokenization.")
-
-	//fmt.Printf("%+v\n", allTables)
+	// Call function to get all tables from given HTML
+	tables := scrapeTablesFromHTML(bodyElementBytes)
+	log.Debug("Succesfuly finished tokenization.")
 
 	// Filter out tables that are not needed
-	allTables.tableStructureCheckAndCleanup(confluenceScrapeConfig.TableHeaders)
-	log.Println("Succesfuly finished table filtering. Tables matching filter:", len(allTables.Table))
+	tables.tableStructureCheckAndCleanup(confluenceScrapeConfig.TableHeaders)
+	log.Debug("Succesfuly finished table filtering. Tables matching filter:", len(tables.Table))
 
-	// Get table data as JSON
-	jsonOutput := allTables.convertToJSON()
+	// Convert filtered tables to JSON
+	jsonOutput := tables.convertToJSON()
 
-	fmt.Println(jsonOutput)
+	// Extract only wanted collums from tables
+	filteredCollumns := jsonOutput.getKVPairs(confluenceScrapeConfig.KVList)
 
-	//fmt.Printf("%v\n", allTables)
-	b, err := json.Marshal(jsonOutput.getKVPairs(confluenceScrapeConfig.KVList))
-	if err != nil {
-		fmt.Println(err)
+	// Output results
+	switch confluenceScrapeConfig.Output {
+	case "stdout":
+		{
+			b, err := json.Marshal(filteredCollumns)
+			if err != nil {
+				log.Fatal(err)
+			}
+			fmt.Println(string(b))
+		}
+	case "tfvars":
+		{
+			output := TFVars{}
+			output.AWXInventories = make(map[string]Inventories)
+
+			inventory := Inventories{}
+			inventory.DocsURL = ("https://" + confluenceScrapeConfig.ConfluenceDomain + pageBodyAndMetadata.Links.Content + pageBodyAndMetadata.Links.WebUI)
+			inventory.Hosts = filteredCollumns
+
+			output.AWXInventories[pageBodyAndMetadata.Title] = inventory
+
+			data, err := json.Marshal(output)
+
+			if err != nil {
+				log.Fatal(err)
+			}
+			fmt.Printf("%s\n", data)
+
+		}
 	}
-	log.Println("Writing tables as JSON to file ...")
-	err = ioutil.WriteFile("/tmp/dat1", b, 0644)
-	if err != nil {
-		fmt.Println(err)
-	}
-	log.Println("Successfuly written tables to /tmp/dat1")
 }

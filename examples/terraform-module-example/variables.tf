@@ -1,6 +1,6 @@
 variable "awx_inventories" {
   type = map(object({
-    confluence_url  = string
+    docs_url  = string
     support_ticket  = string
     hosts = map(string) 
   }))

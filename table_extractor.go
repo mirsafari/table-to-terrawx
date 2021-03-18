@@ -12,14 +12,21 @@ import (
 	"golang.org/x/net/html"
 )
 
+/* getPageAsJSON functions fetches content from Confluence and returs reposnse in the form of Content struct
+Return values:
+- Content struct - unmarshalled JSON with fields defined in struct definition
+*/
 func getPageAsJSON(config CLIflags) Content {
-	// Create new request object
+	// Craft URL to fetch from Confluence REST API so we get reposne as JSON
+	// Get only contents inside <body> because that is where tables are located
 	confluenceRESTAPIEndpoint := "https://" + config.ConfluenceDomain + "/wiki/rest/api/content/" + strconv.Itoa(int(config.ConfluencePageID)) + "?expand=body.storage.value"
+	// Create new request object
 	req, err := http.NewRequest("GET", confluenceRESTAPIEndpoint, nil)
 	if err != nil {
 		log.Fatal("Failed creating request object. Exiting. Error: ", err)
 	}
 
+	// Set Auth credentials
 	req.SetBasicAuth(config.ConfluenceUser, config.ConfluenceAPIKey)
 
 	client := &http.Client{Timeout: time.Second * 10}
@@ -34,11 +41,11 @@ func getPageAsJSON(config CLIflags) Content {
 
 	// Read Request and save it to struct
 	jsonResponse := Content{}
-	rawData, err := ioutil.ReadAll(resp.Body) // Read response from io.ReadCloser and save it as byte to data
+	rawData, err := ioutil.ReadAll(resp.Body) // Read response from io.ReadCloser and save it to rawData variable
 	if err != nil {
 		log.Fatal("Failed reading response. Exiting. Error: ", err)
 	}
-	err = json.Unmarshal(rawData, &jsonResponse) // Try to unmarshal to raw encoded JSON value to map, notice &
+	err = json.Unmarshal(rawData, &jsonResponse) // Try to unmarshal to rawData variable to jsonResponse (Content struct)
 	if err != nil {
 		log.Fatal("Failed converting response to JSON. Exiting. Error: ", err)
 	}
@@ -48,6 +55,12 @@ func getPageAsJSON(config CLIflags) Content {
 	return jsonResponse
 }
 
+/* scrapeTablesFromHTML is a function that extracts all table elements from HTML using tokenization
+Args:
+- io.Reader - input for html.NewTokenizer(), in our case that is HTML content inside <body>, converted to byte
+Return values:
+- TableContainer struct containing all tables found on webpage
+*/
 func scrapeTablesFromHTML(webpageHTML io.Reader) TableContainer {
 	// Initialize variables used in tokenization
 	var tableRow []string
@@ -57,6 +70,7 @@ func scrapeTablesFromHTML(webpageHTML io.Reader) TableContainer {
 	tableContainer := TableContainer{}
 	table := Table{}
 
+	// Start tokenization
 	z := html.NewTokenizer(webpageHTML)
 	for {
 		// Go to next element and increase counter
@@ -86,12 +100,15 @@ func scrapeTablesFromHTML(webpageHTML io.Reader) TableContainer {
 			t = z.Token()
 			// Loop untill we hit table again, but this time it is closing table tag </table>. This means we do not go back, untill we go throught whole table
 			for t.Data != "table" {
+				// Search for tr
 				if t.Data == "tr" && tt == html.StartTagToken {
+					// Set tableRow to empty slice, since each row will have its own data inside <td>
 					tableRow = []string{}
 					tt = z.Next()
 					t = z.Token()
 					// Loop whole row to get all data inside this row
 					for t.Data != "tr" {
+						// If there is th inside row, this means we first need to extract table headers
 						if t.Data == "th" && tt == html.StartTagToken {
 							tt = z.Next()
 							t = z.Token()
@@ -101,24 +118,25 @@ func scrapeTablesFromHTML(webpageHTML io.Reader) TableContainer {
 								if tt == html.TextToken {
 									table.ColumnHeaders = append(table.ColumnHeaders, t.Data)
 								}
-								// Go to next element and check again if we reached end of thead
+								// Go to next element and check again if we reached end of thead and extracted html.TextToken
 								tt = z.Next()
 								t = z.Token()
 							}
 						}
 
+						// If there is td inside row, this means that we need to fetch all data inside this row
 						if t.Data == "td" && tt == html.StartTagToken {
-							// Set tableRow to empty slice, since each row will have its own data inside <td>
 							// Go to next element
 							tt = z.Next()
 							t = z.Token()
-							// Iterate further untill we hit tr again, this means we got to </tr>. We are not exiting loop untill we get raw data (html.TextToken). This data is only inside <td>
+							// Iterate further untill we hit td again, this means we got to </td>. We are not exiting loop untill we get raw data (html.TextToken). This data is only inside <td>
 							for t.Data != "td" {
 								if tt == html.TextToken {
 									// If we found raw data, we apped it to slice of that row
 									tableRow = append(tableRow, t.Data)
 								}
 								if tt == html.SelfClosingTagToken {
+									// If there is SelfClosingToken that usally means it's a <p/> which indicates that value inside collumn is empty
 									tableRow = append(tableRow, "")
 								}
 								// And then we go to next element

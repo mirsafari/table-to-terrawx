@@ -10,6 +10,7 @@ type CLIflags struct {
 	TableHeaders     string
 	KVList           string
 	Output           string
+	LogLevel         bool
 }
 
 // Data structures for parsing table data
@@ -30,6 +31,17 @@ type TableContainerJSON struct {
 	Tables [][]map[string]string
 }
 
+// TFVars is a struct defining output format if --output=tfvars is set
+type TFVars struct {
+	AWXInventories map[string]Inventories `json:"awx_inventories"`
+}
+
+// Inventories is a struct defining each invertory for output in TFVars
+type Inventories struct {
+	DocsURL string            `json:"docs_url"`
+	Hosts   map[string]string `json:"hosts"`
+}
+
 // Confluence Response data structure
 // Content is a struct containing properties of JSON response recieved by Confluence API
 type Content struct {
@@ -37,6 +49,7 @@ type Content struct {
 	Type  string `json:"type"`
 	Title string `json:"title"`
 	Body  Body   `json:"body"`
+	Links Links  `json:"_links,omitempty"`
 }
 
 // Body struct holds the storage information and is nested under Content
@@ -47,4 +60,12 @@ type Body struct {
 // Storage struct .Value holds the real <body> elemet of HTML and is nested under Body
 type Storage struct {
 	Value string `json:"value"`
+}
+
+// Links struct contains link information
+type Links struct {
+	Base    string `json:"base"`
+	TinyUI  string `json:"tinyui"`
+	WebUI   string `json:"webui"`
+	Content string `json:"context"`
 }
